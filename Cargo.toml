@@ -1,0 +1,36 @@
+[workspace]
+members = [
+    "crates/cm108-types",
+    "crates/cm108-hal",
+    "crates/cm108-server",
+    "crates/cm108-client",
+]
+resolver = "2"
+
+[workspace.package]
+version = "0.1.0"
+edition = "2021"
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/devinf/cm108-driver"
+rust-version = "1.75"
+
+[workspace.dependencies]
+cm108-types  = { path = "crates/cm108-types" }
+cm108-hal    = { path = "crates/cm108-hal" }
+rusb         = "0.9"
+rtrb         = "0.3"
+postcard     = { version = "1", features = ["alloc"] }
+libc         = "0.2"
+nix          = { version = "0.29", features = ["socket", "uio", "fs"] }
+thiserror    = "2"
+tracing      = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+clap         = { version = "4", features = ["derive", "env"] }
+bitflags     = { version = "2", features = ["serde"] }
+anyhow       = "1"
+
+[profile.release]
+opt-level     = 3
+lto           = "thin"
+codegen-units = 1
+panic         = "abort"

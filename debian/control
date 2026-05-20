@@ -1,0 +1,22 @@
+Source: cm108-driver
+Section: hamradio
+Priority: optional
+Maintainer: Devin Frederick <devin.frederick2012@gmail.com>
+Build-Depends:
+ debhelper-compat (= 13),
+ libusb-1.0-0-dev,
+ pkg-config,
+ cargo,
+ rustc (>= 1.75),
+Standards-Version: 4.7.0
+Homepage: https://github.com/devinf/cm108-driver
+Rules-Requires-Root: no
+
+Package: cm108d
+Architecture: any
+Depends: ${shlibs:Depends}, ${misc:Depends}, libusb-1.0-0
+Description: Pure-Rust real-time audio server for CM108/CM119 USB devices
+ cm108d replaces the ALSA snd-usb-audio driver for C-Media CM108/CM119
+ USB audio chips used in amateur radio repeater systems. It provides
+ deterministic sub-5ms audio I/O and direct HID GPIO access for PTT/COS
+ control via SCHED_FIFO real-time threads.

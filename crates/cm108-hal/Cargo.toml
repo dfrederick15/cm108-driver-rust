@@ -1,0 +1,15 @@
+[package]
+name        = "cm108-hal"
+description = "USB hardware abstraction for CM108/CM119 audio + HID GPIO"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[dependencies]
+cm108-types = { workspace = true }
+rusb        = { workspace = true }
+rtrb        = { workspace = true }
+libc        = { workspace = true }
+thiserror   = { workspace = true }
+tracing     = { workspace = true }

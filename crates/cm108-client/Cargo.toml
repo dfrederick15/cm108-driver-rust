@@ -1,0 +1,23 @@
+[package]
+name        = "cm108-client"
+description = "Client library for the CM108/CM119 audio server (Rust + C FFI)"
+version.workspace    = true
+edition.workspace    = true
+license.workspace    = true
+repository.workspace = true
+
+[lib]
+name    = "cm108client"
+crate-type = ["rlib", "cdylib", "staticlib"]
+
+[dependencies]
+cm108-types = { workspace = true }
+postcard    = { workspace = true }
+nix         = { workspace = true }
+thiserror   = { workspace = true }
+
+[features]
+generate-header = []
+
+[build-dependencies]
+cbindgen = "0.27"

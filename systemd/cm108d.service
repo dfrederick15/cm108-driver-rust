@@ -1,0 +1,31 @@
+[Unit]
+Description=CM108/CM119 real-time audio server
+After=local-fs.target
+
+[Service]
+Type=notify
+User=cm108
+Group=cm108
+ExecStart=/usr/local/bin/cm108d --socket /run/cm108d/cm108d.sock
+RuntimeDirectory=cm108d
+RuntimeDirectoryMode=0750
+
+# Real-time privileges
+AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK
+LimitRTPRIO=95
+LimitMEMLOCK=infinity
+LimitNICE=-20
+
+# Watchdog — restart if audio threads stall
+WatchdogSec=2s
+Restart=on-failure
+RestartSec=1s
+
+# Hardening
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+NoNewPrivileges=true
+
+[Install]
+WantedBy=multi-user.target

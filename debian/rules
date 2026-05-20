@@ -1,0 +1,35 @@
+#!/usr/bin/make -f
+# Reproducible build requirements per https://wiki.debian.org/ReproducibleBuilds/Howto
+
+export DH_VERBOSE = 1
+
+# Honour SOURCE_DATE_EPOCH set by the build infrastructure.
+# Fall back to the changelog date for developer builds.
+export SOURCE_DATE_EPOCH ?= $(shell dpkg-parsechangelog -S Date | date -f- +%s 2>/dev/null || echo 0)
+
+# Locale must be fixed for deterministic output ordering.
+export LC_ALL = C.UTF-8
+
+# Strip build-host paths from all debug info → reproducible binaries.
+export RUSTFLAGS += \
+    --remap-path-prefix $(CURDIR)=. \
+    --remap-path-prefix $(HOME)=<home> \
+    -C debuginfo=2
+
+# Ensure Cargo does not embed build host metadata.
+export CARGO_BUILD_JOBS ?= $(shell nproc)
+
+%:
+	dh $@ --buildsystem=cargo
+
+override_dh_auto_build:
+	cargo build --release --locked
+
+override_dh_auto_test:
+	cargo test --release --locked
+
+override_dh_auto_install:
+	install -Dm755 target/release/cm108d \
+	    debian/cm108d/usr/local/bin/cm108d
+	install -Dm644 systemd/cm108d.service \
+	    debian/cm108d/lib/systemd/system/cm108d.service

@@ -1,0 +1,11 @@
+target/
+include/cm108.h
+*.deb
+*.changes
+*.buildinfo
+*.dsc
+*.orig.tar.*
+debian/.debhelper/
+debian/cm108d/
+debian/files
+debian/tmp/
