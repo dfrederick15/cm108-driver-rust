@@ -48,10 +48,6 @@ impl AudioShmem {
         new
     }
 
-    pub fn current_seq(&self) -> u64 {
-        self.seq().load(Ordering::Acquire)
-    }
-
     fn seq(&self) -> &AtomicU64 {
         // SAFETY: mmap returns page-aligned (≥ 8-byte aligned) memory.
         unsafe { &*(self.ptr.cast::<AtomicU64>()) }
