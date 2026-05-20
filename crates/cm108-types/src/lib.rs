@@ -69,7 +69,7 @@ pub enum RadioEvent {
 // ── IPC protocol ─────────────────────────────────────────────────────────────
 
 bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, Serialize, Deserialize)]
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
     pub struct StreamFlags: u8 {
         const AUDIO_IN    = 0b0001;
         const AUDIO_OUT   = 0b0010;
@@ -77,22 +77,37 @@ bitflags::bitflags! {
     }
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+/// Dispatch latency summary reported by the server every 5 000 frames (~5 s).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct LatencyStats {
+    pub min_us: u32,
+    pub max_us: u32,
+    /// Approximate 99th-percentile dispatch latency (µs), log2-bucket resolution.
+    pub p99_us: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ClientMsg {
     Subscribe { streams: StreamFlags },
     SetGpio { pin: u8, high: bool },
     /// Client has written `frame_count` frames to the TX shmem region.
     AudioWrite { frame_count: u32 },
     Ping,
+    /// Request an immediate stats snapshot from the server.
+    GetStats,
 }
 
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub enum ServerMsg {
     /// `seq` is the frame sequence number written to RX shmem.
     AudioReady { seq: u64 },
     RadioEvent(RadioEvent),
-    /// Health counters: (rx_xruns, tx_xruns).
-    Stats { rx_xruns: u64, tx_xruns: u64 },
+    /// Health counters and dispatch latency histogram summary.
+    Stats {
+        rx_xruns: u64,
+        tx_xruns: u64,
+        dispatch_lat: LatencyStats,
+    },
     Pong,
     Error(#[serde(with = "serde_string")] String),
 }

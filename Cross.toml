@@ -1,0 +1,26 @@
+# Cross.toml — configuration for the `cross` cross-compilation tool
+# https://github.com/cross-rs/cross
+#
+# Build for ARM64 (Raspberry Pi 3B+/4/5):
+#   cross build --target aarch64-unknown-linux-gnu --release
+#
+# Prerequisites:
+#   cargo install cross --git https://github.com/cross-rs/cross
+#   # Docker or Podman must be running
+
+[target.aarch64-unknown-linux-gnu]
+image = "ghcr.io/cross-rs/aarch64-unknown-linux-gnu:main"
+
+# Mount the host pkg-config database so libusb-1.0 is found during cross-build.
+# The cross image ships libusb-1.0-dev for aarch64; no host pkg-config needed.
+pre-build = [
+    "apt-get update -q",
+    "apt-get install -y --no-install-recommends libusb-1.0-0-dev:arm64",
+]
+
+[target.armv7-unknown-linux-gnueabihf]
+image = "ghcr.io/cross-rs/armv7-unknown-linux-gnueabihf:main"
+pre-build = [
+    "apt-get update -q",
+    "apt-get install -y --no-install-recommends libusb-1.0-0-dev:armhf",
+]

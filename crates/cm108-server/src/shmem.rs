@@ -1,7 +1,7 @@
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cm108_types::{AudioFrame, FRAME_BYTES};
+use cm108_types::{AudioFrame, FRAME_BYTES, SAMPLES_PER_FRAME};
 
 /// One OS page — enough for the seqlock header + one AudioFrame + padding.
 /// Layout: [u64 seq_counter (8 bytes)][AudioFrame data (192 bytes)][padding to 4096]
@@ -66,6 +66,88 @@ impl AudioShmem {
 impl Drop for AudioShmem {
     fn drop(&mut self) {
         unsafe { libc::munmap(self.ptr.cast(), SHMEM_SIZE) };
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::{
+        Arc,
+        atomic::{AtomicBool, Ordering},
+    };
+
+    impl AudioShmem {
+        /// Seqlock read — mirrors what the client-side `RxShmem::read_frame` does.
+        fn read_frame_seqlock(&self) -> AudioFrame {
+            loop {
+                let s1 = self.seq().load(Ordering::Acquire);
+                if s1 % 2 != 0 { std::hint::spin_loop(); continue; }
+                let mut frame = AudioFrame::default();
+                unsafe {
+                    std::ptr::copy_nonoverlapping(
+                        self.data_ptr() as *const u8,
+                        frame.0.as_mut_ptr().cast::<u8>(),
+                        FRAME_BYTES,
+                    );
+                }
+                if self.seq().load(Ordering::Acquire) == s1 { return frame; }
+            }
+        }
+    }
+
+    #[test]
+    fn write_and_read_single_frame() {
+        let shmem = AudioShmem::create("test-rw").unwrap();
+        let mut frame = AudioFrame::default();
+        frame.0[0] = 0x1234;
+        frame.0[95] = -1;
+        let seq = shmem.write(&frame);
+        assert_eq!(seq % 2, 0, "seq must be even after write");
+        let got = shmem.read_frame_seqlock();
+        assert_eq!(got.0[0], 0x1234);
+        assert_eq!(got.0[95], -1);
+    }
+
+    #[test]
+    fn seq_increments_by_two_per_write() {
+        let shmem = AudioShmem::create("test-seq").unwrap();
+        let s1 = shmem.write(&AudioFrame::default());
+        let s2 = shmem.write(&AudioFrame::default());
+        assert_eq!(s2, s1 + 2);
+    }
+
+    #[test]
+    fn seqlock_no_torn_reads() {
+        // Writer alternates between frames where every sample == toggle value.
+        // Reader verifies every sample in each read frame is identical (no mixing).
+        let shmem = Arc::new(AudioShmem::create("test-torn").unwrap());
+        let stop = Arc::new(AtomicBool::new(false));
+
+        let w_shmem = Arc::clone(&shmem);
+        let w_stop = Arc::clone(&stop);
+        let writer = std::thread::spawn(move || {
+            let mut toggle = 0i16;
+            while !w_stop.load(Ordering::Relaxed) {
+                let frame = AudioFrame([toggle; SAMPLES_PER_FRAME * 2]);
+                w_shmem.write(&frame);
+                toggle = toggle.wrapping_add(1);
+            }
+        });
+
+        for _ in 0..20_000 {
+            let frame = shmem.read_frame_seqlock();
+            let expected = frame.0[0];
+            for (i, &s) in frame.0.iter().enumerate() {
+                assert_eq!(
+                    s, expected,
+                    "torn seqlock read: sample[{i}] = {s}, expected {expected}"
+                );
+            }
+        }
+
+        stop.store(true, Ordering::Relaxed);
+        writer.join().unwrap();
     }
 }
 

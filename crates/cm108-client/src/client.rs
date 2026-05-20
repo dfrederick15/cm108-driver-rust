@@ -3,7 +3,7 @@ use std::os::unix::net::UnixStream;
 use std::path::Path;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cm108_types::{AudioFrame, ClientMsg, ServerMsg, StreamFlags, FRAME_BYTES};
+use cm108_types::{AudioFrame, ClientMsg, LatencyStats, ServerMsg, StreamFlags, FRAME_BYTES};
 
 use crate::framing::{read_server_msg, write_client_msg};
 use crate::{ClientError, Result};
@@ -159,6 +159,21 @@ impl Cm108Client {
 
     pub fn ping(&mut self) -> Result<()> {
         write_client_msg(&mut self.writer, &ClientMsg::Ping).map_err(ClientError::Io)
+    }
+
+    /// Request a stats snapshot from the server and block until it arrives.
+    /// Returns `(rx_xruns, tx_xruns, dispatch_latency)`.
+    pub fn get_stats(&mut self) -> Result<(u64, u64, LatencyStats)> {
+        write_client_msg(&mut self.writer, &ClientMsg::GetStats).map_err(ClientError::Io)?;
+        loop {
+            match read_server_msg(&mut self.reader).map_err(ClientError::Io)? {
+                Some(ServerMsg::Stats { rx_xruns, tx_xruns, dispatch_lat }) => {
+                    return Ok((rx_xruns, tx_xruns, dispatch_lat));
+                }
+                Some(_) => {}
+                None => return Err(ClientError::Disconnected),
+            }
+        }
     }
 }
 

@@ -1,0 +1,17 @@
+# 90-cm108.rules — udev rules for C-Media CM108/CM119 USB audio chips
+#
+# Install to: /etc/udev/rules.d/90-cm108.rules
+# Reload with: udevadm control --reload && udevadm trigger
+
+# Grant the 'cm108' group read/write access and tag the device for seat-level
+# access (uaccess), so desktop sessions can also open it without sudo.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0d8c", \
+    MODE="0660", GROUP="cm108", TAG+="uaccess"
+
+# Prevent the kernel from binding snd-usb-audio or hid to the device.
+# cm108d detaches any residual kernel driver at startup via libusb, but
+# stopping the bind in the first place avoids a brief race on hotplug.
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0d8c", \
+    ATTR{bInterfaceClass}=="01", OPTIONS+="ignore_device"
+SUBSYSTEM=="usb", ATTRS{idVendor}=="0d8c", \
+    ATTR{bInterfaceClass}=="03", OPTIONS+="ignore_device"

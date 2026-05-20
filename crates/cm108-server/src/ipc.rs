@@ -5,7 +5,7 @@ use std::os::unix::net::UnixStream;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
-use cm108_types::{ClientMsg, RadioEvent, ServerMsg, StreamFlags};
+use cm108_types::{ClientMsg, LatencyStats, RadioEvent, ServerMsg, StreamFlags};
 use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
 use nix::sys::socket::UnixAddr;
 use tracing::{debug, warn};
@@ -73,10 +73,17 @@ impl ClientRegistry {
         }
     }
 
-    pub fn broadcast_stats(&self, rx_xruns: u64, tx_xruns: u64) {
+    pub fn broadcast_stats(&self, rx_xruns: u64, tx_xruns: u64, dispatch_lat: LatencyStats) {
         let clients = self.clients.lock().unwrap();
         for h in clients.values() {
-            let _ = h.sender.try_send(ServerMsg::Stats { rx_xruns, tx_xruns });
+            let _ = h.sender.try_send(ServerMsg::Stats { rx_xruns, tx_xruns, dispatch_lat });
+        }
+    }
+
+    fn send_to(&self, id: ClientId, msg: ServerMsg) {
+        let clients = self.clients.lock().unwrap();
+        if let Some(h) = clients.get(&id) {
+            let _ = h.sender.try_send(msg);
         }
     }
 }
@@ -88,6 +95,11 @@ pub struct ClientContext {
     pub rx_shmem_fd: RawFd,
     pub device: Arc<cm108_hal::Cm108Device>,
     pub gpio: Arc<Mutex<cm108_hal::HidGpio>>,
+    /// Live xrun counters updated by the ISO threads.
+    pub rx_xruns: Arc<AtomicU64>,
+    pub tx_xruns: Arc<AtomicU64>,
+    /// Last latency snapshot published by the dispatch thread.
+    pub last_latency: Arc<Mutex<LatencyStats>>,
 }
 
 pub fn handle_client(mut stream: UnixStream, ctx: Arc<ClientContext>) {
@@ -155,15 +167,18 @@ fn dispatch_client_msg(id: ClientId, msg: ClientMsg, ctx: &ClientContext) {
             }
         }
         ClientMsg::AudioWrite { frame_count } => {
-            // Phase 4: read frame_count frames from TX shmem, push to IsoStream.
-            debug!(id, frame_count, "AudioWrite (unimplemented in Phase 3)");
+            debug!(id, frame_count, "AudioWrite (TX path not yet implemented)");
         }
         ClientMsg::Ping => {
-            // Enqueue pong; writer thread will flush it.
-            let clients = ctx.registry.clients.lock().unwrap();
-            if let Some(h) = clients.get(&id) {
-                let _ = h.sender.try_send(ServerMsg::Pong);
-            }
+            ctx.registry.send_to(id, ServerMsg::Pong);
+        }
+        ClientMsg::GetStats => {
+            let lat = ctx.last_latency.lock().unwrap().clone();
+            ctx.registry.send_to(id, ServerMsg::Stats {
+                rx_xruns: ctx.rx_xruns.load(Ordering::Relaxed),
+                tx_xruns: ctx.tx_xruns.load(Ordering::Relaxed),
+                dispatch_lat: lat,
+            });
         }
     }
 }

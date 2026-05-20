@@ -1,4 +1,5 @@
 mod ipc;
+mod latency;
 mod server;
 mod shmem;
 

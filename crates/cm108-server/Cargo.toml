@@ -22,3 +22,23 @@ tracing      = { workspace = true }
 tracing-subscriber = { workspace = true }
 clap         = { workspace = true }
 anyhow       = { workspace = true }
+
+[package.metadata.deb]
+name            = "cm108d"
+section         = "net"
+priority        = "optional"
+depends         = "$auto, adduser, libusb-1.0-0 (>= 1.0.21)"
+suggests        = "linux-image-rt-amd64 | linux-image-rt-arm64"
+maintainer-scripts = "debian/"
+assets = [
+    ["target/release/cm108d",            "usr/sbin/cm108d",                           "755"],
+    ["systemd/cm108d.service",           "lib/systemd/system/cm108d.service",         "644"],
+    ["udev/90-cm108.rules",              "lib/udev/rules.d/90-cm108.rules",           "644"],
+    ["debian/cm108d.conf",               "etc/security/limits.d/cm108d.conf",         "644"],
+]
+conf-files = ["/etc/security/limits.d/cm108d.conf"]
+
+[package.metadata.deb.systemd-units]
+unit-scripts = "systemd/"
+enable       = false
+start        = false

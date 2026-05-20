@@ -1,14 +1,16 @@
 use std::os::unix::net::UnixListener;
 use std::path::Path;
+use std::sync::atomic::Ordering;
 use std::sync::{Arc, Mutex};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cm108_hal::{hid_gpio::HidGpio, rt, Cm108Device, IsoStream};
-use cm108_types::GpioState;
+use cm108_types::{GpioState, LatencyStats};
 use tracing::{info, warn};
 
 use crate::ipc::{ClientContext, ClientRegistry};
+use crate::latency::LatencyHistogram;
 use crate::shmem::AudioShmem;
 
 pub fn run(socket_path: &str) -> anyhow::Result<()> {
@@ -26,30 +28,43 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
     // ── Client registry ───────────────────────────────────────────────────────
     let registry = Arc::new(ClientRegistry::new());
 
+    // Shared latency snapshot published by the dispatch thread; read by GetStats handlers.
+    let last_latency: Arc<Mutex<LatencyStats>> = Arc::new(Mutex::new(LatencyStats::default()));
+
     // ── Audio dispatch thread: IsoStream RX → shmem seqlock → AudioReady ─────
     {
         let shmem = Arc::clone(&rx_shmem);
         let reg = Arc::clone(&registry);
-        let rxr = rx_xruns.clone();
-        let txr = tx_xruns.clone();
+        let rxr = Arc::clone(&rx_xruns);
+        let txr = Arc::clone(&tx_xruns);
+        let lat_out = Arc::clone(&last_latency);
         thread::Builder::new()
             .name("cm108-dispatch".into())
             .spawn(move || {
                 rt::configure_rt(88, 1);
                 let mut stats_ticker = 0u64;
                 let mut rx_consumer = rx_consumer;
+                let mut histogram = LatencyHistogram::new();
                 loop {
                     match rx_consumer.pop() {
                         Ok(frame) => {
+                            let t0 = Instant::now();
                             let seq = shmem.write(&frame);
                             reg.notify_audio_ready(seq);
+                            let elapsed_us = t0.elapsed().as_micros() as u32;
+                            histogram.record(elapsed_us);
+
                             stats_ticker = stats_ticker.wrapping_add(1);
-                            // Broadcast xrun stats every ~5 seconds (5000 frames @ 1ms each)
+                            // Broadcast xrun + latency stats every ~5 s (5 000 × 1 ms frames).
                             if stats_ticker % 5_000 == 0 {
+                                let lat = histogram.to_stats();
+                                *lat_out.lock().unwrap() = lat;
                                 reg.broadcast_stats(
-                                    rxr.load(std::sync::atomic::Ordering::Relaxed),
-                                    txr.load(std::sync::atomic::Ordering::Relaxed),
+                                    rxr.load(Ordering::Relaxed),
+                                    txr.load(Ordering::Relaxed),
+                                    lat,
                                 );
+                                histogram.reset();
                             }
                         }
                         Err(_) => std::hint::spin_loop(),
@@ -99,6 +114,9 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
         rx_shmem_fd: rx_shmem.raw_fd(),
         device,
         gpio,
+        rx_xruns,
+        tx_xruns,
+        last_latency,
     });
 
     for conn in listener.incoming() {

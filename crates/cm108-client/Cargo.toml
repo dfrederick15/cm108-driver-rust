@@ -22,3 +22,15 @@ generate-header = []
 
 [build-dependencies]
 cbindgen = "0.27"
+
+[package.metadata.deb]
+name     = "libcm108client"
+section  = "libs"
+priority = "optional"
+depends  = "$auto"
+assets = [
+    ["target/release/libcm108client.so",   "usr/lib/libcm108client.so.0.1.0",  "644"],
+    ["include/cm108.h",                    "usr/include/cm108.h",              "644"],
+]
+# Provide /usr/lib/libcm108client.so as the unversioned symlink for -lcm108client.
+provides = "libcm108client-dev"
