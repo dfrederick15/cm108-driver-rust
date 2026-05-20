@@ -1,5 +1,4 @@
 target/
-include/cm108.h
 *.deb
 *.changes
 *.buildinfo

@@ -1,10 +1,9 @@
 use std::io::{self, Read, Write};
 
-use cm108_types::{ClientMsg, ServerMsg};
+use cm108_types::{ClientMsg, Decode, Encode, ServerMsg};
 
 pub fn write_client_msg(stream: &mut impl Write, msg: &ClientMsg) -> io::Result<()> {
-    let payload = postcard::to_allocvec(msg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+    let payload = msg.to_vec();
     stream.write_all(&(payload.len() as u32).to_le_bytes())?;
     stream.write_all(&payload)?;
     stream.flush()
@@ -28,20 +27,19 @@ pub fn read_server_msg(stream: &mut impl Read) -> io::Result<Option<ServerMsg>> 
     }
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf)?;
-    postcard::from_bytes(&buf)
+    ServerMsg::from_bytes(&buf)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "decode error"))
         .map(Some)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-    use cm108_types::{ClientMsg, LatencyStats, RadioEvent, ServerMsg, StreamFlags};
+    use cm108_types::{LatencyStats, RadioEvent, StreamFlags};
     use std::io::Cursor;
 
     fn write_server_msg(buf: &mut impl Write, msg: &ServerMsg) -> io::Result<()> {
-        let payload = postcard::to_allocvec(msg)
-            .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
+        let payload = msg.to_vec();
         buf.write_all(&(payload.len() as u32).to_le_bytes())?;
         buf.write_all(&payload)
     }
@@ -58,15 +56,10 @@ mod tests {
         for msg in &msgs {
             let mut buf = Vec::new();
             write_client_msg(&mut buf, msg).unwrap();
-
-            // Verify length prefix
             let len = u32::from_le_bytes(buf[..4].try_into().unwrap()) as usize;
             assert_eq!(buf.len(), 4 + len);
-
-            // Decode payload
-            let decoded: ClientMsg = postcard::from_bytes(&buf[4..]).unwrap();
-            let re = postcard::to_allocvec(&decoded).unwrap();
-            assert_eq!(re, buf[4..], "framing mismatch for {msg:?}");
+            let decoded = ClientMsg::from_bytes(&buf[4..]).unwrap();
+            assert_eq!(&decoded, msg, "framing mismatch for {msg:?}");
         }
     }
 
@@ -94,16 +87,13 @@ mod tests {
     #[test]
     fn eof_returns_none() {
         let buf: &[u8] = &[];
-        let result = read_server_msg(&mut Cursor::new(buf)).unwrap();
-        assert!(result.is_none());
+        assert!(read_server_msg(&mut Cursor::new(buf)).unwrap().is_none());
     }
 
     #[test]
     fn oversized_message_is_rejected() {
         let mut buf = Vec::new();
-        // Write a length header claiming 128 KiB
         buf.extend_from_slice(&128u32.saturating_mul(1024).to_le_bytes());
-        let result = read_server_msg(&mut Cursor::new(&buf));
-        assert!(result.is_err());
+        assert!(read_server_msg(&mut Cursor::new(&buf)).is_err());
     }
 }

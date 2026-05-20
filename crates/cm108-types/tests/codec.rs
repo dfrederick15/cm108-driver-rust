@@ -1,4 +1,4 @@
-use cm108_types::*;
+use cm108_types::{codec::*, *};
 
 // ── Type invariants ───────────────────────────────────────────────────────────
 
@@ -19,10 +19,10 @@ fn audio_frame_size_matches_frame_bytes() {
 #[test]
 fn gpio_state_pin_bits() {
     let g = GpioState(0b1010);
-    assert!(!g.pin(0)); // GPIO1 clear
-    assert!(g.pin(1));  // GPIO2 set
-    assert!(!g.pin(2)); // GPIO3 clear
-    assert!(g.pin(3));  // GPIO4 set
+    assert!(!g.pin(0));
+    assert!(g.pin(1));
+    assert!(!g.pin(2));
+    assert!(g.pin(3));
 }
 
 #[test]
@@ -42,13 +42,11 @@ fn latency_stats_default_is_zero() {
     assert_eq!(ls.p99_us, 0);
 }
 
-// ── Postcard round-trips ──────────────────────────────────────────────────────
+// ── Codec round-trips ─────────────────────────────────────────────────────────
 
-fn rt<T: serde::Serialize + for<'de> serde::Deserialize<'de> + PartialEq + std::fmt::Debug>(
-    msg: T,
-) {
-    let encoded = postcard::to_allocvec(&msg).unwrap();
-    let decoded: T = postcard::from_bytes(&encoded).unwrap();
+fn rt<T: Encode + Decode + PartialEq + std::fmt::Debug>(msg: T) {
+    let encoded = msg.to_vec();
+    let decoded = T::from_bytes(&encoded).expect("decode failed");
     assert_eq!(msg, decoded);
 }
 
@@ -96,4 +94,18 @@ fn radio_event_roundtrip_all_variants() {
     ] {
         rt(ev);
     }
+}
+
+#[test]
+fn framed_roundtrip() {
+    let msg = ClientMsg::Subscribe { streams: StreamFlags::AUDIO_IN };
+    let framed = cm108_types::codec::to_framed(&msg);
+    let (decoded, _rest) = cm108_types::codec::from_framed::<ClientMsg>(&framed).unwrap();
+    assert_eq!(msg, decoded);
+}
+
+#[test]
+fn decode_rejects_unknown_tag() {
+    let bad = [0xff_u8]; // unknown ClientMsg tag
+    assert!(ClientMsg::from_bytes(&bad).is_none());
 }

@@ -1,6 +1,7 @@
 #![cfg_attr(not(feature = "std"), no_std)]
 
-use serde::{Deserialize, Serialize};
+pub mod codec;
+pub use codec::{Decode, Encode};
 
 // ── USB constants ─────────────────────────────────────────────────────────────
 
@@ -11,21 +12,14 @@ pub const CM108_PIDS: &[u16] = &[
     0x001f, 0x0105, 0x0107, 0x010f, 0x0115, 0x013c,
 ];
 
-/// Audio control interface index.
 pub const IFACE_AUDIO: u8 = 0;
-/// HID interface index (GPIO).
-pub const IFACE_HID: u8 = 2;
-
-/// Isochronous audio-OUT endpoint (host → device).
-pub const EP_ISO_OUT: u8 = 0x01;
-/// Isochronous audio-IN endpoint (device → host).
-pub const EP_ISO_IN: u8 = 0x82;
-/// Interrupt-IN endpoint for HID GPIO reports.
-pub const EP_HID_IN: u8 = 0x83;
+pub const IFACE_HID:   u8 = 2;
+pub const EP_ISO_OUT:  u8 = 0x01;
+pub const EP_ISO_IN:   u8 = 0x82;
+pub const EP_HID_IN:   u8 = 0x83;
 
 /// Bytes per USB frame: 48 samples × stereo × i16 @ 48 kHz = 1 ms.
 pub const FRAME_BYTES: usize = 192;
-/// Samples per frame per channel.
 pub const SAMPLES_PER_FRAME: usize = 48;
 
 // ── Audio frame ───────────────────────────────────────────────────────────────
@@ -37,15 +31,13 @@ pub const SAMPLES_PER_FRAME: usize = 48;
 pub struct AudioFrame(pub [i16; SAMPLES_PER_FRAME * 2]);
 
 impl Default for AudioFrame {
-    fn default() -> Self {
-        Self([0i16; SAMPLES_PER_FRAME * 2])
-    }
+    fn default() -> Self { Self([0i16; SAMPLES_PER_FRAME * 2]) }
 }
 
 // ── GPIO ──────────────────────────────────────────────────────────────────────
 
 /// Bitmask of GPIO1–GPIO4 pin states (bit 0 = GPIO1 / PTT).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct GpioState(pub u8);
 
 impl GpioState {
@@ -57,7 +49,7 @@ impl GpioState {
 
 // ── Radio events ──────────────────────────────────────────────────────────────
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum RadioEvent {
     PttAssert,
     PttDeassert,
@@ -66,58 +58,62 @@ pub enum RadioEvent {
     GpioChange(GpioState),
 }
 
-// ── IPC protocol ─────────────────────────────────────────────────────────────
+// ── Dispatch latency summary ──────────────────────────────────────────────────
 
-bitflags::bitflags! {
-    #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
-    pub struct StreamFlags: u8 {
-        const AUDIO_IN    = 0b0001;
-        const AUDIO_OUT   = 0b0010;
-        const GPIO_EVENTS = 0b0100;
-    }
-}
-
-/// Dispatch latency summary reported by the server every 5 000 frames (~5 s).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct LatencyStats {
     pub min_us: u32,
     pub max_us: u32,
-    /// Approximate 99th-percentile dispatch latency (µs), log2-bucket resolution.
     pub p99_us: u32,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+// ── Stream subscription flags ─────────────────────────────────────────────────
+
+/// Bitmask of audio/event streams a client subscribes to.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[repr(transparent)]
+pub struct StreamFlags(pub u8);
+
+impl StreamFlags {
+    pub const AUDIO_IN:    Self = Self(0b0001);
+    pub const AUDIO_OUT:   Self = Self(0b0010);
+    pub const GPIO_EVENTS: Self = Self(0b0100);
+
+    pub fn empty() -> Self { Self(0) }
+    pub fn bits(self) -> u8 { self.0 }
+    pub fn contains(self, other: Self) -> bool { self.0 & other.0 == other.0 }
+    pub fn from_bits_truncate(v: u8) -> Self { Self(v & 0b0111) }
+}
+
+impl std::ops::BitOr for StreamFlags {
+    type Output = Self;
+    fn bitor(self, rhs: Self) -> Self { Self(self.0 | rhs.0) }
+}
+
+impl std::ops::BitOrAssign for StreamFlags {
+    fn bitor_assign(&mut self, rhs: Self) { self.0 |= rhs.0; }
+}
+
+// ── IPC protocol ─────────────────────────────────────────────────────────────
+
+#[derive(Clone, Debug, PartialEq)]
 pub enum ClientMsg {
     Subscribe { streams: StreamFlags },
     SetGpio { pin: u8, high: bool },
-    /// Client has written `frame_count` frames to the TX shmem region.
     AudioWrite { frame_count: u32 },
     Ping,
-    /// Request an immediate stats snapshot from the server.
     GetStats,
 }
 
-#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum ServerMsg {
-    /// `seq` is the frame sequence number written to RX shmem.
     AudioReady { seq: u64 },
     RadioEvent(RadioEvent),
-    /// Health counters and dispatch latency histogram summary.
     Stats {
         rx_xruns: u64,
         tx_xruns: u64,
         dispatch_lat: LatencyStats,
     },
     Pong,
-    Error(#[serde(with = "serde_string")] String),
-}
-
-mod serde_string {
-    use serde::{Deserialize, Deserializer, Serialize, Serializer};
-    pub fn serialize<S: Serializer>(s: &str, ser: S) -> Result<S::Ok, S::Error> {
-        s.serialize(ser)
-    }
-    pub fn deserialize<'de, D: Deserializer<'de>>(de: D) -> Result<String, D::Error> {
-        String::deserialize(de)
-    }
+    Error(String),
 }

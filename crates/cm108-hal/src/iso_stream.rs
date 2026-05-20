@@ -4,9 +4,8 @@ use std::thread;
 
 use cm108_types::{AudioFrame, FRAME_BYTES, EP_ISO_IN, EP_ISO_OUT};
 use rtrb::{Consumer, Producer, RingBuffer};
-use tracing::{debug, warn};
 
-use crate::{Cm108Device, Result};
+use crate::{log_debug, log_warn, Cm108Device, Result};
 
 const RING_CAPACITY: usize = 64;
 
@@ -33,28 +32,10 @@ impl IsoStream {
         let rx_xruns = Arc::new(AtomicU64::new(0));
         let tx_xruns = Arc::new(AtomicU64::new(0));
 
-        spawn_rx_thread(
-            Arc::clone(&device),
-            rx_prod,
-            Arc::clone(&rx_xruns),
-            rx_priority,
-            rx_core,
-        );
+        spawn_rx_thread(Arc::clone(&device), rx_prod, Arc::clone(&rx_xruns), rx_priority, rx_core);
+        spawn_tx_thread(Arc::clone(&device), tx_cons, Arc::clone(&tx_xruns), tx_priority, tx_core);
 
-        spawn_tx_thread(
-            Arc::clone(&device),
-            tx_cons,
-            Arc::clone(&tx_xruns),
-            tx_priority,
-            tx_core,
-        );
-
-        Ok(Self {
-            rx_consumer: rx_cons,
-            tx_producer: tx_prod,
-            rx_xruns,
-            tx_xruns,
-        })
+        Ok(Self { rx_consumer: rx_cons, tx_producer: tx_prod, rx_xruns, tx_xruns })
     }
 }
 
@@ -69,22 +50,23 @@ fn spawn_rx_thread(
         .name("cm108-rx".into())
         .spawn(move || {
             crate::rt::configure_rt(priority, core);
-            debug!("RX thread started");
+            log_debug!("RX thread started");
 
-            // Simple synchronous ISO-IN loop.
-            // TODO: migrate to libusb async transfer queue for QUEUE_DEPTH in-flight.
             let mut buf = [0u8; FRAME_BYTES];
             loop {
-                match device.handle.read_bulk(EP_ISO_IN, &mut buf, std::time::Duration::from_millis(5)) {
+                match device
+                    .handle
+                    .read_bulk(EP_ISO_IN, &mut buf, std::time::Duration::from_millis(5))
+                {
                     Ok(n) if n == FRAME_BYTES => {
                         let frame = bytes_to_frame(&buf);
                         if prod.push(frame).is_err() {
                             xruns.fetch_add(1, Ordering::Relaxed);
                         }
                     }
-                    Ok(_) => {} // short read — skip
+                    Ok(_) => {}
                     Err(rusb::Error::Timeout) => {}
-                    Err(e) => warn!("RX error: {e}"),
+                    Err(e) => log_warn!("RX error: {e}"),
                 }
             }
         })
@@ -102,7 +84,7 @@ fn spawn_tx_thread(
         .name("cm108-tx".into())
         .spawn(move || {
             crate::rt::configure_rt(priority, core);
-            debug!("TX thread started");
+            log_debug!("TX thread started");
 
             loop {
                 match cons.pop() {
@@ -114,15 +96,12 @@ fn spawn_tx_thread(
                             std::time::Duration::from_millis(5),
                         ) {
                             if e != rusb::Error::Timeout {
-                                warn!("TX error: {e}");
+                                log_warn!("TX error: {e}");
                                 xruns.fetch_add(1, Ordering::Relaxed);
                             }
                         }
                     }
-                    Err(_) => {
-                        // Ring empty — yield briefly to avoid spinning.
-                        std::hint::spin_loop();
-                    }
+                    Err(_) => std::hint::spin_loop(),
                 }
             }
         })

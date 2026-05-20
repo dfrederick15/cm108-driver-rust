@@ -6,9 +6,6 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 
 use cm108_types::{ClientMsg, LatencyStats, RadioEvent, ServerMsg, StreamFlags};
-use nix::sys::socket::{sendmsg, ControlMessage, MsgFlags};
-use nix::sys::socket::UnixAddr;
-use tracing::{debug, warn};
 
 // ── Client registry ──────────────────────────────────────────────────────────
 
@@ -44,7 +41,7 @@ impl ClientRegistry {
 
     pub fn unregister(&self, id: ClientId) {
         self.clients.lock().unwrap().remove(&id);
-        debug!(id, "client disconnected");
+        log_debug!("client disconnected id={id}");
     }
 
     pub fn update_streams(&self, id: ClientId, streams: StreamFlags) {
@@ -95,10 +92,8 @@ pub struct ClientContext {
     pub rx_shmem_fd: RawFd,
     pub device: Arc<cm108_hal::Cm108Device>,
     pub gpio: Arc<Mutex<cm108_hal::HidGpio>>,
-    /// Live xrun counters updated by the ISO threads.
     pub rx_xruns: Arc<AtomicU64>,
     pub tx_xruns: Arc<AtomicU64>,
-    /// Last latency snapshot published by the dispatch thread.
     pub last_latency: Arc<Mutex<LatencyStats>>,
 }
 
@@ -112,18 +107,16 @@ pub fn handle_client(mut stream: UnixStream, ctx: Arc<ClientContext>) {
         sender: msg_tx,
     });
 
-    // Step 1: hand the RX shmem fd to the client via SCM_RIGHTS.
     if let Err(e) = send_fd(stream.as_raw_fd(), ctx.rx_shmem_fd) {
-        warn!(id, "failed to send shmem fd: {e}");
+        log_warn!("failed to send shmem fd: {e} id={id}");
         ctx.registry.unregister(id);
         return;
     }
 
-    // Step 2: writer thread — serialises outbound ServerMsg onto the socket.
     let mut writer = match stream.try_clone() {
         Ok(s) => s,
         Err(e) => {
-            warn!(id, "try_clone failed: {e}");
+            log_warn!("try_clone failed: {e} id={id}");
             ctx.registry.unregister(id);
             return;
         }
@@ -136,15 +129,14 @@ pub fn handle_client(mut stream: UnixStream, ctx: Arc<ClientContext>) {
         }
     });
 
-    debug!(id, "client connected");
+    log_debug!("client connected id={id}");
 
-    // Step 3: reader loop — process inbound ClientMsg.
     loop {
         match read_msg(&mut stream) {
             Ok(Some(msg)) => dispatch_client_msg(id, msg, &ctx),
             Ok(None) => break,
             Err(e) => {
-                warn!(id, "read error: {e}");
+                log_warn!("read error: {e} id={id}");
                 break;
             }
         }
@@ -157,17 +149,17 @@ fn dispatch_client_msg(id: ClientId, msg: ClientMsg, ctx: &ClientContext) {
     match msg {
         ClientMsg::Subscribe { streams } => {
             ctx.registry.update_streams(id, streams);
-            debug!(id, ?streams, "client subscribed");
+            log_debug!("client subscribed id={id} streams={streams:?}");
         }
         ClientMsg::SetGpio { pin, high } => {
             if let Ok(mut g) = ctx.gpio.lock() {
                 if let Err(e) = g.set_pin(&ctx.device.handle, pin, high) {
-                    warn!(id, pin, high, "SetGpio error: {e}");
+                    log_warn!("SetGpio error: {e} id={id} pin={pin} high={high}");
                 }
             }
         }
         ClientMsg::AudioWrite { frame_count } => {
-            debug!(id, frame_count, "AudioWrite (TX path not yet implemented)");
+            log_debug!("AudioWrite id={id} frame_count={frame_count} (TX path not yet implemented)");
         }
         ClientMsg::Ping => {
             ctx.registry.send_to(id, ServerMsg::Pong);
@@ -183,18 +175,18 @@ fn dispatch_client_msg(id: ClientId, msg: ClientMsg, ctx: &ClientContext) {
     }
 }
 
-// ── Message framing (4-byte LE length prefix + postcard payload) ─────────────
+// ── Message framing (4-byte LE length prefix + hand-rolled codec payload) ────
 
 pub fn write_msg(stream: &mut impl Write, msg: &ServerMsg) -> io::Result<()> {
-    let payload = postcard::to_allocvec(msg)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))?;
-    let len = (payload.len() as u32).to_le_bytes();
-    stream.write_all(&len)?;
+    use cm108_types::Encode;
+    let payload = msg.to_vec();
+    stream.write_all(&(payload.len() as u32).to_le_bytes())?;
     stream.write_all(&payload)?;
     stream.flush()
 }
 
 pub fn read_msg(stream: &mut impl Read) -> io::Result<Option<ClientMsg>> {
+    use cm108_types::Decode;
     let mut len_buf = [0u8; 4];
     match stream.read_exact(&mut len_buf) {
         Err(e) if e.kind() == io::ErrorKind::UnexpectedEof => return Ok(None),
@@ -207,21 +199,41 @@ pub fn read_msg(stream: &mut impl Read) -> io::Result<Option<ClientMsg>> {
     }
     let mut buf = vec![0u8; len];
     stream.read_exact(&mut buf)?;
-    postcard::from_bytes(&buf)
+    ClientMsg::from_bytes(&buf)
+        .ok_or_else(|| io::Error::new(io::ErrorKind::InvalidData, "decode error"))
         .map(Some)
-        .map_err(|e| io::Error::new(io::ErrorKind::InvalidData, e))
 }
 
-// ── SCM_RIGHTS fd passing ────────────────────────────────────────────────────
+// ── SCM_RIGHTS fd passing via raw libc ───────────────────────────────────────
 
-/// Send `fd_to_send` as ancillary data over `socket` (connected Unix stream).
+/// Send `fd_to_send` as SCM_RIGHTS ancillary data over `socket`.
 fn send_fd(socket: RawFd, fd_to_send: RawFd) -> io::Result<()> {
-    let payload = [0u8; 1]; // Linux requires ≥ 1 byte of regular data with SCM_RIGHTS
-    let iov = [std::io::IoSlice::new(&payload)];
-    let fds = [fd_to_send];
-    let cmsg = [ControlMessage::ScmRights(&fds)];
-    let none: Option<&UnixAddr> = None;
-    sendmsg(socket, &iov, &cmsg, MsgFlags::empty(), none)
-        .map(|_| ())
-        .map_err(|e| io::Error::new(io::ErrorKind::Other, e))
+    let cmsg_space =
+        unsafe { libc::CMSG_SPACE(std::mem::size_of::<i32>() as u32) as usize };
+    let mut cmsg_buf = vec![0u8; cmsg_space];
+    let payload = [0u8; 1]; // Linux requires ≥1 byte of real data with SCM_RIGHTS
+
+    let mut iov = libc::iovec {
+        iov_base: payload.as_ptr() as *mut libc::c_void,
+        iov_len:  payload.len(),
+    };
+    let mut msg: libc::msghdr = unsafe { std::mem::zeroed() };
+    msg.msg_iov        = &mut iov as *mut _;
+    msg.msg_iovlen     = 1;
+    msg.msg_control    = cmsg_buf.as_mut_ptr().cast();
+    msg.msg_controllen = cmsg_space as _;
+
+    unsafe {
+        let cmsg = libc::CMSG_FIRSTHDR(&msg);
+        (*cmsg).cmsg_level = libc::SOL_SOCKET;
+        (*cmsg).cmsg_type  = libc::SCM_RIGHTS;
+        (*cmsg).cmsg_len   =
+            libc::CMSG_LEN(std::mem::size_of::<i32>() as u32) as _;
+        *(libc::CMSG_DATA(cmsg).cast::<i32>()) = fd_to_send;
+    }
+
+    if unsafe { libc::sendmsg(socket, &msg, 0) } < 0 {
+        return Err(io::Error::last_os_error());
+    }
+    Ok(())
 }

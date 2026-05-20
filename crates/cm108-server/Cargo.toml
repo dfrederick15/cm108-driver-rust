@@ -11,17 +11,10 @@ name = "cm108d"
 path = "src/main.rs"
 
 [dependencies]
-cm108-types  = { workspace = true }
-cm108-hal    = { workspace = true }
-rusb         = { workspace = true }
-libc         = { workspace = true }
-nix          = { workspace = true }
-postcard     = { workspace = true }
-thiserror    = { workspace = true }
-tracing      = { workspace = true }
-tracing-subscriber = { workspace = true }
-clap         = { workspace = true }
-anyhow       = { workspace = true }
+cm108-types = { workspace = true }
+cm108-hal   = { workspace = true }
+rusb        = { workspace = true }
+libc        = { workspace = true }
 
 [package.metadata.deb]
 name            = "cm108d"

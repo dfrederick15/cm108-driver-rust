@@ -11,5 +11,3 @@ cm108-types = { workspace = true }
 rusb        = { workspace = true }
 rtrb        = { workspace = true }
 libc        = { workspace = true }
-thiserror   = { workspace = true }
-tracing     = { workspace = true }

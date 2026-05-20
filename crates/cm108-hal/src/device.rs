@@ -1,8 +1,7 @@
 use cm108_types::{CM108_VID, CM108_PIDS, IFACE_AUDIO, IFACE_HID};
 use rusb::{DeviceHandle, GlobalContext};
-use tracing::info;
 
-use crate::{HalError, Result};
+use crate::{log_info, HalError, Result};
 
 pub struct Cm108Device {
     pub handle: DeviceHandle<GlobalContext>,
@@ -26,7 +25,7 @@ impl Cm108Device {
                 handle.claim_interface(IFACE_AUDIO)?;
                 handle.claim_interface(IFACE_HID)?;
 
-                info!(pid = format!("{:#06x}", pid), "opened CM108 device");
+                log_info!("opened CM108 device pid={pid:#06x}");
                 return Ok(Self { handle, pid });
             }
         }
@@ -38,7 +37,6 @@ impl Drop for Cm108Device {
     fn drop(&mut self) {
         let _ = self.handle.release_interface(IFACE_AUDIO);
         let _ = self.handle.release_interface(IFACE_HID);
-        // Re-attach kernel drivers so the device is usable again after we exit.
         let _ = self.handle.attach_kernel_driver(IFACE_AUDIO);
         let _ = self.handle.attach_kernel_driver(IFACE_HID);
     }
@@ -48,10 +46,9 @@ fn detach_if_active(handle: &mut DeviceHandle<GlobalContext>, iface: u8) -> Resu
     match handle.kernel_driver_active(iface) {
         Ok(true) => {
             handle.detach_kernel_driver(iface)?;
-            info!(iface, "detached kernel driver");
+            log_info!("detached kernel driver iface={iface}");
         }
         Ok(false) => {}
-        // Some platforms (e.g. macOS) don't support this call — ignore.
         Err(rusb::Error::NotSupported) => {}
         Err(e) => return Err(e.into()),
     }

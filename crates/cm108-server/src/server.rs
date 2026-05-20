@@ -7,42 +7,34 @@ use std::time::{Duration, Instant};
 
 use cm108_hal::{hid_gpio::HidGpio, rt, Cm108Device, IsoStream};
 use cm108_types::{GpioState, LatencyStats};
-use tracing::{info, warn};
 
 use crate::ipc::{ClientContext, ClientRegistry};
 use crate::latency::LatencyHistogram;
 use crate::shmem::AudioShmem;
 
-pub fn run(socket_path: &str) -> anyhow::Result<()> {
-    // ── Hardware ──────────────────────────────────────────────────────────────
+pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let device = Arc::new(Cm108Device::open()?);
     let gpio = Arc::new(Mutex::new(HidGpio::new()));
-
-    // ── Shared memory (RX: server→clients) ───────────────────────────────────
     let rx_shmem = Arc::new(AudioShmem::create("cm108-rx")?);
-
-    // ── IsoStream (USB audio threads) ─────────────────────────────────────────
     let iso = IsoStream::start(Arc::clone(&device), 90, 90, 1, 1)?;
     let IsoStream { rx_consumer, tx_producer: _tx_producer, rx_xruns, tx_xruns } = iso;
 
-    // ── Client registry ───────────────────────────────────────────────────────
     let registry = Arc::new(ClientRegistry::new());
+    let last_latency: Arc<Mutex<LatencyStats>> =
+        Arc::new(Mutex::new(LatencyStats::default()));
 
-    // Shared latency snapshot published by the dispatch thread; read by GetStats handlers.
-    let last_latency: Arc<Mutex<LatencyStats>> = Arc::new(Mutex::new(LatencyStats::default()));
-
-    // ── Audio dispatch thread: IsoStream RX → shmem seqlock → AudioReady ─────
+    // ── Audio dispatch thread ─────────────────────────────────────────────────
     {
         let shmem = Arc::clone(&rx_shmem);
-        let reg = Arc::clone(&registry);
-        let rxr = Arc::clone(&rx_xruns);
-        let txr = Arc::clone(&tx_xruns);
-        let lat_out = Arc::clone(&last_latency);
+        let reg   = Arc::clone(&registry);
+        let rxr   = Arc::clone(&rx_xruns);
+        let txr   = Arc::clone(&tx_xruns);
+        let lat   = Arc::clone(&last_latency);
         thread::Builder::new()
             .name("cm108-dispatch".into())
             .spawn(move || {
                 rt::configure_rt(88, 1);
-                let mut stats_ticker = 0u64;
+                let mut ticker = 0u64;
                 let mut rx_consumer = rx_consumer;
                 let mut histogram = LatencyHistogram::new();
                 loop {
@@ -51,18 +43,15 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
                             let t0 = Instant::now();
                             let seq = shmem.write(&frame);
                             reg.notify_audio_ready(seq);
-                            let elapsed_us = t0.elapsed().as_micros() as u32;
-                            histogram.record(elapsed_us);
-
-                            stats_ticker = stats_ticker.wrapping_add(1);
-                            // Broadcast xrun + latency stats every ~5 s (5 000 × 1 ms frames).
-                            if stats_ticker % 5_000 == 0 {
-                                let lat = histogram.to_stats();
-                                *lat_out.lock().unwrap() = lat;
+                            histogram.record(t0.elapsed().as_micros() as u32);
+                            ticker = ticker.wrapping_add(1);
+                            if ticker % 5_000 == 0 {
+                                let snap = histogram.to_stats();
+                                *lat.lock().unwrap() = snap;
                                 reg.broadcast_stats(
                                     rxr.load(Ordering::Relaxed),
                                     txr.load(Ordering::Relaxed),
-                                    lat,
+                                    snap,
                                 );
                                 histogram.reset();
                             }
@@ -73,7 +62,7 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
             })?;
     }
 
-    // ── GPIO poller thread: HID interrupt-IN → RadioEvent broadcasts ──────────
+    // ── GPIO poller thread ────────────────────────────────────────────────────
     {
         let dev = Arc::clone(&device);
         let reg = Arc::clone(&registry);
@@ -90,7 +79,7 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
                         }
                         Ok(_) => {}
                         Err(e) => {
-                            warn!("HID poll error: {e}");
+                            log_warn!("HID poll error: {e}");
                             thread::sleep(Duration::from_millis(10));
                         }
                     }
@@ -100,14 +89,10 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
 
     // ── Unix socket accept loop ───────────────────────────────────────────────
     let sock_path = Path::new(socket_path);
-    if sock_path.exists() {
-        std::fs::remove_file(sock_path)?;
-    }
-    if let Some(parent) = sock_path.parent() {
-        std::fs::create_dir_all(parent)?;
-    }
+    if sock_path.exists() { std::fs::remove_file(sock_path)?; }
+    if let Some(parent) = sock_path.parent() { std::fs::create_dir_all(parent)?; }
     let listener = UnixListener::bind(sock_path)?;
-    info!(socket = socket_path, "cm108d listening");
+    log_info!("cm108d listening socket={socket_path}");
 
     let ctx = Arc::new(ClientContext {
         registry,
@@ -125,7 +110,7 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
                 let ctx = Arc::clone(&ctx);
                 thread::spawn(move || crate::ipc::handle_client(stream, ctx));
             }
-            Err(e) => warn!("accept error: {e}"),
+            Err(e) => log_warn!("accept error: {e}"),
         }
     }
 
@@ -135,12 +120,10 @@ pub fn run(socket_path: &str) -> anyhow::Result<()> {
 fn emit_gpio_events(state: GpioState, prev: GpioState, reg: &ClientRegistry) {
     use cm108_types::RadioEvent;
 
-    // GPIO1 (bit 0) → PTT
     let ptt = state.pin(0);
     if ptt != prev.pin(0) {
         reg.broadcast_radio_event(if ptt { RadioEvent::PttAssert } else { RadioEvent::PttDeassert });
     }
-    // GPIO2 (bit 1) → COS
     let cos = state.pin(1);
     if cos != prev.pin(1) {
         reg.broadcast_radio_event(if cos { RadioEvent::CosActive } else { RadioEvent::CosInactive });

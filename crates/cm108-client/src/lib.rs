@@ -5,19 +5,31 @@ mod framing;
 pub use client::Cm108Client;
 pub use ffi::Cm108Event;
 
-// Re-export types callers need when using the Rust API directly.
 pub use cm108_types::{AudioFrame, RadioEvent, ServerMsg, StreamFlags};
 
-use thiserror::Error;
+use std::fmt;
 
-#[derive(Debug, Error)]
+#[derive(Debug)]
 pub enum ClientError {
-    #[error("IO error: {0}")]
-    Io(#[from] std::io::Error),
-    #[error("protocol error: {0}")]
+    Io(std::io::Error),
     Protocol(String),
-    #[error("server disconnected")]
     Disconnected,
+}
+
+impl fmt::Display for ClientError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Io(e)        => write!(f, "IO error: {e}"),
+            Self::Protocol(s)  => write!(f, "protocol error: {s}"),
+            Self::Disconnected => write!(f, "server disconnected"),
+        }
+    }
+}
+
+impl std::error::Error for ClientError {}
+
+impl From<std::io::Error> for ClientError {
+    fn from(e: std::io::Error) -> Self { Self::Io(e) }
 }
 
 pub type Result<T> = std::result::Result<T, ClientError>;
