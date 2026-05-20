@@ -1,7 +1,12 @@
 mod client;
 mod ffi;
+mod framing;
 
 pub use client::Cm108Client;
+pub use ffi::Cm108Event;
+
+// Re-export types callers need when using the Rust API directly.
+pub use cm108_types::{AudioFrame, RadioEvent, ServerMsg, StreamFlags};
 
 use thiserror::Error;
 

@@ -1,0 +1,17 @@
+language = "C"
+include_version = true
+cpp_compat = true
+documentation = true
+
+[defines]
+"feature = generate-header" = "CM108_GENERATE_HEADER"
+
+[export]
+include = ["Cm108Event", "cm108_connect", "cm108_destroy", "cm108_subscribe",
+           "cm108_read_audio", "cm108_write_audio", "cm108_set_ptt",
+           "cm108_set_gpio", "cm108_poll_event"]
+exclude = []
+
+[layout]
+packed = false
+aligned_n = 1
