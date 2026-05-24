@@ -1,7 +1,7 @@
 use std::os::unix::io::{AsRawFd, FromRawFd, OwnedFd, RawFd};
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cm108_types::{AudioFrame, FRAME_BYTES, SAMPLES_PER_FRAME};
+use cm108_types::{AudioFrame, FRAME_BYTES};
 
 /// One OS page — enough for the seqlock header + one AudioFrame + padding.
 /// Layout: [u64 seq_counter (8 bytes)][AudioFrame data (192 bytes)][padding to 4096]

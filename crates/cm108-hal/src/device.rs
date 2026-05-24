@@ -1,4 +1,4 @@
-use cm108_types::{CM108_VID, CM108_PIDS, IFACE_AUDIO, IFACE_HID};
+use cm108_types::{CM108_VID, CM108_PIDS, IFACE_AUDIO_CTRL, IFACE_AUDIO_OUT, IFACE_AUDIO_IN, IFACE_HID};
 use rusb::{DeviceHandle, GlobalContext};
 
 use crate::{log_info, HalError, Result};
@@ -10,7 +10,8 @@ pub struct Cm108Device {
 
 impl Cm108Device {
     /// Find and open the first CM108/CM119 device on the USB bus.
-    /// Detaches the kernel snd-usb-audio and hid drivers so we own the device.
+    /// Detaches snd-usb-audio and hid from all four interfaces, claims them,
+    /// then activates alternate setting 1 on the two streaming interfaces.
     pub fn open() -> Result<Self> {
         let devices = rusb::devices()?;
         for device in devices.iter() {
@@ -19,11 +20,14 @@ impl Cm108Device {
                 let mut handle = device.open()?;
                 let pid = desc.product_id();
 
-                detach_if_active(&mut handle, IFACE_AUDIO)?;
-                detach_if_active(&mut handle, IFACE_HID)?;
+                for iface in [IFACE_AUDIO_CTRL, IFACE_AUDIO_OUT, IFACE_AUDIO_IN, IFACE_HID] {
+                    detach_if_active(&mut handle, iface)?;
+                    handle.claim_interface(iface)?;
+                }
 
-                handle.claim_interface(IFACE_AUDIO)?;
-                handle.claim_interface(IFACE_HID)?;
+                // Activate isochronous endpoints (alt 0 has no endpoints).
+                handle.set_alternate_setting(IFACE_AUDIO_OUT, 1).map_err(HalError::Usb)?;
+                handle.set_alternate_setting(IFACE_AUDIO_IN,  1).map_err(HalError::Usb)?;
 
                 log_info!("opened CM108 device pid={pid:#06x}");
                 return Ok(Self { handle, pid });
@@ -35,10 +39,11 @@ impl Cm108Device {
 
 impl Drop for Cm108Device {
     fn drop(&mut self) {
-        let _ = self.handle.release_interface(IFACE_AUDIO);
-        let _ = self.handle.release_interface(IFACE_HID);
-        let _ = self.handle.attach_kernel_driver(IFACE_AUDIO);
-        let _ = self.handle.attach_kernel_driver(IFACE_HID);
+        for iface in [IFACE_AUDIO_CTRL, IFACE_AUDIO_OUT, IFACE_AUDIO_IN, IFACE_HID] {
+            let _ = self.handle.set_alternate_setting(iface, 0);
+            let _ = self.handle.release_interface(iface);
+            let _ = self.handle.attach_kernel_driver(iface);
+        }
     }
 }
 

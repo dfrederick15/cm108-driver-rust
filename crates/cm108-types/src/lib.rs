@@ -9,14 +9,16 @@ pub const CM108_VID: u16 = 0x0d8c;
 
 /// Known CM108/CM119 product IDs.
 pub const CM108_PIDS: &[u16] = &[
-    0x001f, 0x0105, 0x0107, 0x010f, 0x0115, 0x013c,
+    0x001f, 0x0105, 0x0107, 0x010f, 0x0115, 0x013a, 0x013c,
 ];
 
-pub const IFACE_AUDIO: u8 = 0;
-pub const IFACE_HID:   u8 = 2;
-pub const EP_ISO_OUT:  u8 = 0x01;
-pub const EP_ISO_IN:   u8 = 0x82;
-pub const EP_HID_IN:   u8 = 0x83;
+pub const IFACE_AUDIO_CTRL: u8 = 0; // USB Audio Class: audio control
+pub const IFACE_AUDIO_OUT:  u8 = 1; // audio streaming — speaker (ISO OUT)
+pub const IFACE_AUDIO_IN:   u8 = 2; // audio streaming — mic (ISO IN)
+pub const IFACE_HID:        u8 = 3; // HID interface — GPIO/PTT
+pub const EP_ISO_OUT:       u8 = 0x01;
+pub const EP_ISO_IN:        u8 = 0x82;
+pub const EP_HID_IN:        u8 = 0x87;
 
 /// Bytes per USB frame: 48 samples × stereo × i16 @ 48 kHz = 1 ms.
 pub const FRAME_BYTES: usize = 192;

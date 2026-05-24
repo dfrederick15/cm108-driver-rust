@@ -2,8 +2,12 @@ use std::collections::HashMap;
 use std::io::{self, Read, Write};
 use std::os::unix::io::{AsRawFd, RawFd};
 use std::os::unix::net::UnixStream;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
+
+// GPIO4 (0-indexed pin 3) drives the PC_OK heartbeat LED via inverting transistor.
+// High → PC_OK low → LED on.
+const HEARTBEAT_PIN: u8 = 3;
 
 use cm108_types::{ClientMsg, LatencyStats, RadioEvent, ServerMsg, StreamFlags};
 
@@ -95,6 +99,7 @@ pub struct ClientContext {
     pub rx_xruns: Arc<AtomicU64>,
     pub tx_xruns: Arc<AtomicU64>,
     pub last_latency: Arc<Mutex<LatencyStats>>,
+    pub heartbeat_state: AtomicBool,
 }
 
 pub fn handle_client(mut stream: UnixStream, ctx: Arc<ClientContext>) {
@@ -146,6 +151,12 @@ pub fn handle_client(mut stream: UnixStream, ctx: Arc<ClientContext>) {
 }
 
 fn dispatch_client_msg(id: ClientId, msg: ClientMsg, ctx: &ClientContext) {
+    // Toggle heartbeat LED on every received message.
+    let next = !ctx.heartbeat_state.fetch_xor(true, Ordering::Relaxed);
+    if let Ok(mut g) = ctx.gpio.lock() {
+        let _ = g.set_pin(&ctx.device.handle, HEARTBEAT_PIN, next);
+    }
+
     match msg {
         ClientMsg::Subscribe { streams } => {
             ctx.registry.update_streams(id, streams);

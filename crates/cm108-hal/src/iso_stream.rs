@@ -2,7 +2,7 @@ use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::Arc;
 use std::thread;
 
-use cm108_types::{AudioFrame, FRAME_BYTES, EP_ISO_IN, EP_ISO_OUT};
+use cm108_types::{AudioFrame, FRAME_BYTES, EP_ISO_OUT};
 use rtrb::{Consumer, Producer, RingBuffer};
 
 use crate::{log_debug, log_warn, Cm108Device, Result};
@@ -40,34 +40,22 @@ impl IsoStream {
 }
 
 fn spawn_rx_thread(
-    device: Arc<Cm108Device>,
-    mut prod: Producer<AudioFrame>,
-    xruns: Arc<AtomicU64>,
-    priority: i32,
-    core: usize,
+    _device: Arc<Cm108Device>,
+    _prod: Producer<AudioFrame>,
+    _xruns: Arc<AtomicU64>,
+    _priority: i32,
+    _core: usize,
 ) {
     thread::Builder::new()
         .name("cm108-rx".into())
         .spawn(move || {
-            crate::rt::configure_rt(priority, core);
-            log_debug!("RX thread started");
-
-            let mut buf = [0u8; FRAME_BYTES];
+            // TODO: replace with proper isochronous URB submission via
+            // USBDEVFS_SUBMITURB once the GPIO/PTT path is validated.
+            // read_bulk does not work on ISO endpoints; this stub sleeps to
+            // avoid burning CPU until the ISO path is implemented.
+            log_warn!("RX audio: ISO transfer not yet implemented, audio input disabled");
             loop {
-                match device
-                    .handle
-                    .read_bulk(EP_ISO_IN, &mut buf, std::time::Duration::from_millis(5))
-                {
-                    Ok(n) if n == FRAME_BYTES => {
-                        let frame = bytes_to_frame(&buf);
-                        if prod.push(frame).is_err() {
-                            xruns.fetch_add(1, Ordering::Relaxed);
-                        }
-                    }
-                    Ok(_) => {}
-                    Err(rusb::Error::Timeout) => {}
-                    Err(e) => log_warn!("RX error: {e}"),
-                }
+                thread::sleep(std::time::Duration::from_secs(60));
             }
         })
         .expect("failed to spawn RX thread");
@@ -101,7 +89,7 @@ fn spawn_tx_thread(
                             }
                         }
                     }
-                    Err(_) => std::hint::spin_loop(),
+                    Err(_) => thread::sleep(std::time::Duration::from_millis(1)),
                 }
             }
         })

@@ -1,6 +1,6 @@
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::sync::atomic::Ordering;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -73,7 +73,7 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
                 let mut prev = GpioState(0);
                 loop {
                     match HidGpio::read_state(&dev.handle) {
-                        Ok(state) if state != prev => {
+                        Ok(Some(state)) if state != prev => {
                             emit_gpio_events(state, prev, &reg);
                             prev = state;
                         }
@@ -102,6 +102,7 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         rx_xruns,
         tx_xruns,
         last_latency,
+        heartbeat_state: AtomicBool::new(false),
     });
 
     for conn in listener.incoming() {
