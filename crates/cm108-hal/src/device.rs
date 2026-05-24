@@ -6,12 +6,13 @@ use crate::{log_info, HalError, Result};
 pub struct Cm108Device {
     pub handle: DeviceHandle<GlobalContext>,
     pub pid: u16,
+    /// USB bus number — used by IsoStream to open /dev/bus/usb/BBB/DDD.
+    pub bus: u8,
+    /// USB device address on the bus.
+    pub address: u8,
 }
 
 impl Cm108Device {
-    /// Find and open the first CM108/CM119 device on the USB bus.
-    /// Detaches snd-usb-audio and hid from all four interfaces, claims them,
-    /// then activates alternate setting 1 on the two streaming interfaces.
     pub fn open() -> Result<Self> {
         let devices = rusb::devices()?;
         for device in devices.iter() {
@@ -19,18 +20,20 @@ impl Cm108Device {
             if desc.vendor_id() == CM108_VID && CM108_PIDS.contains(&desc.product_id()) {
                 let mut handle = device.open()?;
                 let pid = desc.product_id();
+                let bus = device.bus_number();
+                let address = device.address();
 
+                // Detach kernel drivers from all interfaces so the process owns the device.
                 for iface in [IFACE_AUDIO_CTRL, IFACE_AUDIO_OUT, IFACE_AUDIO_IN, IFACE_HID] {
                     detach_if_active(&mut handle, iface)?;
-                    handle.claim_interface(iface)?;
                 }
 
-                // Activate isochronous endpoints (alt 0 has no endpoints).
-                handle.set_alternate_setting(IFACE_AUDIO_OUT, 1).map_err(HalError::Usb)?;
-                handle.set_alternate_setting(IFACE_AUDIO_IN,  1).map_err(HalError::Usb)?;
+                // rusb claims audio-control and HID; IsoStream claims streaming interfaces.
+                handle.claim_interface(IFACE_AUDIO_CTRL)?;
+                handle.claim_interface(IFACE_HID)?;
 
-                log_info!("opened CM108 device pid={pid:#06x}");
-                return Ok(Self { handle, pid });
+                log_info!("opened CM108 device pid={pid:#06x} bus={bus} addr={address}");
+                return Ok(Self { handle, pid, bus, address });
             }
         }
         Err(HalError::NotFound)
@@ -39,8 +42,7 @@ impl Cm108Device {
 
 impl Drop for Cm108Device {
     fn drop(&mut self) {
-        for iface in [IFACE_AUDIO_CTRL, IFACE_AUDIO_OUT, IFACE_AUDIO_IN, IFACE_HID] {
-            let _ = self.handle.set_alternate_setting(iface, 0);
+        for iface in [IFACE_AUDIO_CTRL, IFACE_HID] {
             let _ = self.handle.release_interface(iface);
             let _ = self.handle.attach_kernel_driver(iface);
         }

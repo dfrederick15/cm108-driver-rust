@@ -2,6 +2,7 @@ pub mod device;
 pub mod hid_gpio;
 pub mod iso_stream;
 pub mod rt;
+pub mod usbfs;
 
 pub use device::Cm108Device;
 pub use hid_gpio::HidGpio;

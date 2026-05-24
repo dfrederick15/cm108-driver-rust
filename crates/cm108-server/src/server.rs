@@ -56,7 +56,7 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
                                 histogram.reset();
                             }
                         }
-                        Err(_) => std::hint::spin_loop(),
+                        Err(_) => thread::sleep(Duration::from_millis(1)),
                     }
                 }
             })?;
