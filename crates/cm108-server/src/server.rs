@@ -1,6 +1,6 @@
 use std::os::unix::net::UnixListener;
 use std::path::Path;
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration, Instant};
@@ -11,6 +11,9 @@ use cm108_types::{GpioState, LatencyStats};
 use crate::ipc::{ClientContext, ClientRegistry};
 use crate::latency::LatencyHistogram;
 use crate::shmem::AudioShmem;
+
+// GPIO4 (pin index 3) — PC_OK heartbeat LED (inverting: high → LED on).
+const HEARTBEAT_PIN: u8 = 3;
 
 pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let device = Arc::new(Cm108Device::open()?);
@@ -87,6 +90,39 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
             })?;
     }
 
+    // ── Heartbeat LED thread ──────────────────────────────────────────────────
+    // 1 Hz when daemon is alive, 2 Hz when a client is actively sending messages.
+    let last_activity_ms = Arc::new(AtomicU64::new(0));
+    {
+        let dev  = Arc::clone(&device);
+        let gpio = Arc::clone(&gpio);
+        let act  = Arc::clone(&last_activity_ms);
+        thread::Builder::new()
+            .name("cm108-heartbeat".into())
+            .spawn(move || {
+                let mut pin_state = false;
+                loop {
+                    let now_ms = std::time::SystemTime::now()
+                        .duration_since(std::time::SystemTime::UNIX_EPOCH)
+                        .unwrap_or_default()
+                        .as_millis() as u64;
+                    let since_ms = now_ms.saturating_sub(act.load(Ordering::Relaxed));
+                    // Within 2 s of last activity → 2 Hz (250 ms half-period).
+                    // Otherwise → 1 Hz (500 ms half-period).
+                    let half_period = if since_ms < 2_000 {
+                        Duration::from_millis(250)
+                    } else {
+                        Duration::from_millis(500)
+                    };
+                    thread::sleep(half_period);
+                    pin_state = !pin_state;
+                    if let Ok(mut g) = gpio.lock() {
+                        let _ = g.set_pin(&dev.handle, HEARTBEAT_PIN, pin_state);
+                    }
+                }
+            })?;
+    }
+
     // ── Unix socket accept loop ───────────────────────────────────────────────
     let sock_path = Path::new(socket_path);
     if sock_path.exists() { std::fs::remove_file(sock_path)?; }
@@ -102,7 +138,7 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         rx_xruns,
         tx_xruns,
         last_latency,
-        heartbeat_state: AtomicBool::new(false),
+        last_activity_ms,
     });
 
     for conn in listener.incoming() {
