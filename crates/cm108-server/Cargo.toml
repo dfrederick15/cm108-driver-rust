@@ -15,6 +15,7 @@ cm108-types = { workspace = true }
 cm108-hal   = { workspace = true }
 rusb        = { workspace = true }
 libc        = { workspace = true }
+rtrb        = { workspace = true }
 
 [package.metadata.deb]
 name            = "cm108d"

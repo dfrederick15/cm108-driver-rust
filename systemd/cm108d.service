@@ -6,7 +6,7 @@ After=local-fs.target
 Type=simple
 ExecStart=/usr/sbin/cm108d --socket /run/cm108d/cm108d.sock --log info
 RuntimeDirectory=cm108d
-RuntimeDirectoryMode=0750
+RuntimeDirectoryMode=0755
 
 # Real-time privileges
 AmbientCapabilities=CAP_SYS_NICE CAP_IPC_LOCK

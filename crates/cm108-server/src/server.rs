@@ -20,7 +20,7 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     let gpio = Arc::new(Mutex::new(HidGpio::new()));
     let rx_shmem = Arc::new(AudioShmem::create("cm108-rx")?);
     let iso = IsoStream::start(Arc::clone(&device), 90, 90, 1, 1)?;
-    let IsoStream { rx_consumer, tx_producer: _tx_producer, rx_xruns, tx_xruns } = iso;
+    let IsoStream { rx_consumer, tx_producer, rx_xruns, tx_xruns } = iso;
 
     let registry = Arc::new(ClientRegistry::new());
     let last_latency: Arc<Mutex<LatencyStats>> =
@@ -126,7 +126,15 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
     // ── Unix socket accept loop ───────────────────────────────────────────────
     let sock_path = Path::new(socket_path);
     if sock_path.exists() { std::fs::remove_file(sock_path)?; }
-    if let Some(parent) = sock_path.parent() { std::fs::create_dir_all(parent)?; }
+    if let Some(parent) = sock_path.parent() {
+        std::fs::create_dir_all(parent)?;
+        // Allow non-root clients (e.g. the 'repeater' user) to enter the dir.
+        use std::os::unix::fs::PermissionsExt;
+        let _ = std::fs::set_permissions(
+            parent,
+            std::fs::Permissions::from_mode(0o755),
+        );
+    }
     let listener = UnixListener::bind(sock_path)?;
     log_info!("cm108d listening socket={socket_path}");
 
@@ -135,6 +143,7 @@ pub fn run(socket_path: &str) -> Result<(), Box<dyn std::error::Error>> {
         rx_shmem_fd: rx_shmem.raw_fd(),
         device,
         gpio,
+        tx_producer: Mutex::new(tx_producer),
         rx_xruns,
         tx_xruns,
         last_latency,

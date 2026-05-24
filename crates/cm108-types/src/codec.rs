@@ -184,9 +184,12 @@ impl Encode for ClientMsg {
                 push_u8(buf, *pin);
                 push_u8(buf, *high as u8);
             }
-            ClientMsg::AudioWrite { frame_count } => {
+            ClientMsg::AudioWrite { frames } => {
                 push_u8(buf, 2);
-                push_u32(buf, *frame_count);
+                push_u32(buf, frames.len() as u32);
+                for frame in frames {
+                    frame.encode(buf);
+                }
             }
             ClientMsg::Ping    => push_u8(buf, 3),
             ClientMsg::GetStats => push_u8(buf, 4),
@@ -207,8 +210,17 @@ impl Decode for ClientMsg {
                 Some((ClientMsg::SetGpio { pin, high: high != 0 }, rest))
             }
             2 => {
-                let (fc, rest) = read_u32(rest)?;
-                Some((ClientMsg::AudioWrite { frame_count: fc }, rest))
+                let (frame_count, mut rest) = read_u32(rest)?;
+                // Sanity cap: 65 536 frames = ~64 s of audio. Anything beyond
+                // that is almost certainly a corrupt length.
+                if frame_count > 65_536 { return None; }
+                let mut frames = Vec::with_capacity(frame_count as usize);
+                for _ in 0..frame_count {
+                    let (frame, r) = AudioFrame::decode(rest)?;
+                    frames.push(frame);
+                    rest = r;
+                }
+                Some((ClientMsg::AudioWrite { frames }, rest))
             }
             3 => Some((ClientMsg::Ping,     rest)),
             4 => Some((ClientMsg::GetStats, rest)),

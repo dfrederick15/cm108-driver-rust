@@ -92,6 +92,7 @@ pub struct ClientContext {
     pub rx_shmem_fd: RawFd,
     pub device: Arc<cm108_hal::Cm108Device>,
     pub gpio: Arc<Mutex<cm108_hal::HidGpio>>,
+    pub tx_producer: Mutex<rtrb::Producer<cm108_types::AudioFrame>>,
     pub rx_xruns: Arc<AtomicU64>,
     pub tx_xruns: Arc<AtomicU64>,
     pub last_latency: Arc<Mutex<LatencyStats>>,
@@ -165,8 +166,14 @@ fn dispatch_client_msg(id: ClientId, msg: ClientMsg, ctx: &ClientContext) {
                 }
             }
         }
-        ClientMsg::AudioWrite { frame_count } => {
-            log_debug!("AudioWrite id={id} frame_count={frame_count} (TX path not yet implemented)");
+        ClientMsg::AudioWrite { frames } => {
+            if let Ok(mut prod) = ctx.tx_producer.lock() {
+                for frame in frames {
+                    if prod.push(frame).is_err() {
+                        ctx.tx_xruns.fetch_add(1, Ordering::Relaxed);
+                    }
+                }
+            }
         }
         ClientMsg::Ping => {
             ctx.registry.send_to(id, ServerMsg::Pong);

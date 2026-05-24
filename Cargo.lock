@@ -37,6 +37,7 @@ dependencies = [
  "cm108-hal",
  "cm108-types",
  "libc",
+ "rtrb",
  "rusb",
 ]
 

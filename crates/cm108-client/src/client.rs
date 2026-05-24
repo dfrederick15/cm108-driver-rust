@@ -157,6 +157,12 @@ impl Cm108Client {
         read_server_msg(&mut self.reader).map_err(ClientError::Io)
     }
 
+    pub fn write_audio(&mut self, frames: &[AudioFrame]) -> Result<()> {
+        if frames.is_empty() { return Ok(()); }
+        let msg = ClientMsg::AudioWrite { frames: frames.to_vec() };
+        write_client_msg(&mut self.writer, &msg).map_err(ClientError::Io)
+    }
+
     pub fn ping(&mut self) -> Result<()> {
         write_client_msg(&mut self.writer, &ClientMsg::Ping).map_err(ClientError::Io)
     }

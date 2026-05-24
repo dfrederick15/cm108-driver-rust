@@ -28,7 +28,7 @@ pub const SAMPLES_PER_FRAME: usize = 48;
 
 /// One millisecond of 48 kHz / 16-bit stereo audio.
 /// Layout: [L0, R0, L1, R1, …] interleaved i16, little-endian.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[repr(C, align(4))]
 pub struct AudioFrame(pub [i16; SAMPLES_PER_FRAME * 2]);
 
@@ -102,7 +102,8 @@ impl std::ops::BitOrAssign for StreamFlags {
 pub enum ClientMsg {
     Subscribe { streams: StreamFlags },
     SetGpio { pin: u8, high: bool },
-    AudioWrite { frame_count: u32 },
+    /// TX audio: inline frame data. Each AudioFrame = 1 ms @ 48 kHz.
+    AudioWrite { frames: Vec<AudioFrame> },
     Ping,
     GetStats,
 }
